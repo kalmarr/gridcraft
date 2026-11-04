@@ -18,6 +18,55 @@ This process was copied from DesignCraft and renamed. User-facing names say
 | Web app dir `apps/gridcraft-web` | `packaging/web/package.sh` |
 | App colour `#1f9d55` (ink `#147a40`), **proposed** | `assets/app-icon/README.md`, metainfo `<branding>` |
 
+## Application self-updates
+
+_Last reviewed and updated: 2026-11-04 (restart guards and native multi-window quit)._
+
+The desktop app checks for updates in the background at startup. **Help > Check for Updates…**
+(and the ribbon's update button, command `app.checkForUpdates`) starts a manual check that also
+reports current-version and failure outcomes. A newer release offers **Update and Restart**,
+**Download**, or **Later**. These are provided by the pinned `craft-update` dependency;
+`crates/ui-egui/src/updates_ui.rs` connects its state machine to GridCraft, and the desktop
+entry point runs the restart helper. The launcher can pin an app or select nightlies; the
+shared updater honors that choice instead of offering a stable release over it.
+
+Update and Restart starts only after all workbooks are saved, all active and parked-window
+cell/text-box drafts are settled, the macro editor and pending macro questions are closed,
+macro recording has stopped, and print submission has finished. GridCraft reevaluates this
+guard on every frame. The shared updater consults it both before starting an installation and
+before requesting the application's exit, so work begun during a background download also
+holds back GridCraft's quit. This later check does not block the worker's on-disk installation.
+The resulting close action uses `SheetApp::request_quit`: every native workbook window
+participates in the normal draft/save safeguards. A raw root-window close would close only
+that workbook and leave the process running.
+
+The platform workflow is owned by the shared updater and has not been replaced by this guard:
+
+| Installed copy | Existing update workflow |
+|---|---|
+| macOS application bundle | Downloads the DMG, verifies the expected Developer ID signer and bundle, replaces the bundle, and schedules reopening. |
+| Windows MSI | Uses the installed copy's per-user/per-machine context, verifies the publisher, and runs its upgrade helper after the old process exits. Machine-wide installation can require OS approval. |
+| Windows portable | The helper verifies and replaces the portable files after exit. |
+| Linux AppImage | Replaces the AppImage and schedules a relaunch. |
+| Linux deb/rpm or supported Flatpak bundle installation | Uses the matching package manager/installation scope and its permission prompt, then schedules a relaunch. |
+| Other unsupported installation types | Offers a download/manual update path. |
+| Web | The native updater is excluded from WASM; update the hosted application. |
+
+The shared download path requires a published SHA-256 digest, using the release asset's digest
+or `SHA256SUMS.txt`; an unverifiable artifact is rejected. Tests of the GridCraft guard cover
+clean versus dirty inactive workbooks, active and parked drafts, macro editing/recording,
+printing started during a download, and application-wide native quit. Run them with
+`cargo test -p gridcraft-ui-egui --lib updates_ui::tests`. These tests do not perform a live
+installation or substitute for macOS/Windows installed-copy smoke tests.
+
+**Pinned dependency limitation:** the app's guard delays quitting, but the shared worker can
+already have replaced files/scheduled its helper while that quit is waiting. In the currently
+pinned `craft-libs` revision `c5a1cbfb5f9049f9270955caffb5bee5997aebf7`, the ordinary Unix
+relaunch helper stops waiting after roughly 60 seconds and can launch another copy even if the
+old process still holds work. The Flatpak helper instead exits on that timeout. GridCraft does
+not force the old process to close; fixing the ordinary Unix helper requires a separate shared
+updater change. This patch does not alter the dependency or claim that the timeout is fixed.
+
 ## Application release prerequisites
 
 The `apps/gridcraft` and `apps/gridcraft-web` crates are workspace members, and
